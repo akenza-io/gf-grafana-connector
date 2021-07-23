@@ -16,12 +16,18 @@ interface Callback {
 export class QueryEditor extends PureComponent<Props, QueryEditorState> {
     private initialLoadingComplete = false;
     private dataSourceId: number;
+    private masterSearch = new Subject<string>();
     private search = new Subject<string>();
 
     constructor(props: Props) {
         super(props);
         const query = this.props.query;
         // initialize the select values and their options if the panel has been saved before, will initialize empty otherwise
+        const masterDeviceSelectValue = {
+            label: query.masterDevice?.name || undefined,
+            value: query.masterDeviceId || null,
+            device: query.masterDevice,
+        };
         const deviceSelectValue = {
             label: query.device?.name || undefined,
             value: query.deviceId || null,
@@ -37,12 +43,15 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         };
         // initialize the state
         this.state = {
+            masterDeviceValue: masterDeviceSelectValue,
+            masterDeviceOptions: [masterDeviceSelectValue],
             deviceValue: deviceSelectValue,
             deviceOptions: [deviceSelectValue],
             topicValue: topicSelectValue,
             topicOptions: [topicSelectValue],
             dataKeyValue: dataKeySelectValue,
             dataKeyOptions: [dataKeySelectValue],
+            loadingMasterDevices: false,
             loadingDevices: false,
             loadingTopics: false,
             loadingDataKeys: false,
@@ -54,31 +63,51 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
     }
 
     private initializeSearchInputSubscription(): void {
+        const { query } = this.props;
+        this.masterSearch
+            // wait for 250ms after the user has finished typing
+            .pipe(debounceTime(250), distinctUntilChanged())
+            // subscribe and update the master device options
+            .subscribe((searchString) => {
+                this.loadMasterDevicesAndAssembleSelectionOptions(searchString, true );
+            });
         this.search
             // wait for 250ms after the user has finished typing
             .pipe(debounceTime(250), distinctUntilChanged())
             // subscribe and update the device options
             .subscribe((searchString) => {
-                this.queryDevicesAndAssembleSelectionOptions(searchString, true);
+                let filter = undefined;
+                let masterDeviceId = undefined;
+                if (query.masterDevice) {
+                    masterDeviceId = query.masterDevice.id;
+                    filter = '{"domain.id": "' + query.masterDevice.domain.id + '"}';
+                }
+                this.loadDevicesAndAssembleSelectionOptions(searchString, true, undefined, filter, masterDeviceId);
             });
     }
 
     private initializeDeviceSelection(): void {
         const { query } = this.props;
         // render() is called multiple times, in order to avoid spam calling our API this check has been put into place
-        if (!this.state.loadingDevices && this.dataSourceId !== this.props.datasource.id) {
+        if (
+            !this.state.loadingMasterDevices &&
+            !this.state.loadingDevices &&
+            this.dataSourceId !== this.props.datasource.id
+        ) {
             if (this.dataSourceId !== this.props.datasource.id && this.initialLoadingComplete) {
                 this.resetAllValues();
                 this.dataSourceId = this.props.datasource.id;
             }
             // load the device list
-            this.queryDevicesAndAssembleSelectionOptions(undefined, false, () => {
-                if (query.deviceId && query.topic) {
-                    // query contains values if the panel was saved at some point, meaning the topic and data key selection should be loaded as well
-                    this.loadTopicsAndAssembleSelectionOptions(query.deviceId!, () => {
-                        this.loadDataKeysAndAssembleSelectionOptions(query.deviceId!, query.topic!, () => {
-                            // set the initial loading state once everything has been loaded
-                            this.initialLoadingComplete = true;
+            this.loadMasterDevicesAndAssembleSelectionOptions(undefined, false, () => {
+                // query contains values if the panel was saved at some point, meaning the topic and data key selection should be loaded as well
+                if (query.masterDeviceId && query.deviceId && query.topic) {
+                    this.loadDevicesAndAssembleSelectionOptions(undefined, false, () => {
+                        this.loadTopicsAndAssembleSelectionOptions(query.deviceId!, () => {
+                            this.loadDataKeysAndAssembleSelectionOptions(query.deviceId!, query.topic!, () => {
+                                // set the initial loading state once everything has been loaded
+                                this.initialLoadingComplete = true;
+                            });
                         });
                     });
                 } else {
@@ -88,21 +117,63 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         }
     }
 
-    private queryDevicesAndAssembleSelectionOptions(
+    private loadMasterDevicesAndAssembleSelectionOptions(
         searchString?: string,
         skipStateUpdate?: boolean,
         callback?: Callback
     ) {
         // the loading state should not be shown under certain circumstances
         if (!skipStateUpdate) {
+            this.setLoadingMasterDevicesState(true);
+        }
+
+        this.props.datasource.getMasterDeviceType().then((masterDeviceType) => {
+            const filter = '{"deviceType.id": "' + masterDeviceType.id + '"}';
+            this.props.datasource.getDevices(searchString, filter).then(
+                (devices: Device[]) => {
+                    const masterDeviceSelectOptions: Array<SelectableValue<string>> = [];
+                    for (const device of devices) {
+                        masterDeviceSelectOptions.push({ label: device.name, value: device.id, device });
+                    }
+                    // modify the state
+                    this.setState((prevState) => ({
+                        ...prevState,
+                        masterDeviceOptions: masterDeviceSelectOptions,
+                    }));
+                    // execute the callback if set
+                    if (callback) {
+                        callback();
+                    }
+                    this.setLoadingMasterDevicesState(false);
+                },
+                // in case an error is thrown, stop the loading animation
+                () => {
+                    this.setLoadingMasterDevicesState(false);
+                }
+            );
+        });
+    }
+
+    private loadDevicesAndAssembleSelectionOptions(
+        searchString?: string,
+        skipStateUpdate?: boolean,
+        callback?: Callback,
+        filter?: string,
+        masterDeviceId?: string
+    ) {
+        // the loading state should not be shown under certain circumstances
+        if (!skipStateUpdate) {
             this.setLoadingDevicesState(true);
         }
 
-        this.props.datasource.getAssets(searchString).then(
+        this.props.datasource.getDevices(searchString, filter, masterDeviceId).then(
             (devices: Device[]) => {
                 const deviceSelectOptions: Array<SelectableValue<string>> = [];
                 for (const device of devices) {
                     deviceSelectOptions.push({ label: device.name, value: device.id, device });
+                }
+                if (this.initialLoadingComplete) {
+                    this.resetDeviceTopicAndDataKeyValues(deviceSelectOptions);
                 }
                 // modify the state
                 this.setState((prevState) => ({
@@ -176,9 +247,12 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
 
     render() {
         const {
+            loadingMasterDevices,
             loadingDevices,
             loadingTopics,
             loadingDataKeys,
+            masterDeviceOptions,
+            masterDeviceValue,
             deviceOptions,
             deviceValue,
             dataKeyOptions,
@@ -192,9 +266,24 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
             <div className="gf-form">
                 <HorizontalGroup spacing={'md'} wrap={true}>
                     <HorizontalGroup spacing={'none'}>
-                        <div className="gf-form-label">Device:</div>
+                        <div className="gf-form-label">Master Device:</div>
                         <Select
                             menuPlacement={'bottom'}
+                            isLoading={loadingMasterDevices}
+                            placeholder={'Select a master device'}
+                            noOptionsMessage={'No master devices available'}
+                            options={masterDeviceOptions}
+                            value={masterDeviceValue}
+                            onChange={this.onMasterDeviceSelectionChange}
+                            width={48}
+                            onInputChange={this.onMasterDeviceInputChange}
+                        />
+                    </HorizontalGroup>
+                    <HorizontalGroup spacing={'none'}>
+                        <div className="gf-form-label">Valve:</div>
+                        <Select
+                            menuPlacement={'bottom'}
+                            disabled={!query.masterDeviceId}
                             isLoading={loadingDevices}
                             placeholder={'Select a device'}
                             noOptionsMessage={'No devices available'}
@@ -238,6 +327,17 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         );
     }
 
+    onMasterDeviceInputChange = (searchString: string): void => {
+        // only set the loading state if the search string is present
+        // due to react lifecycles this triggers if the user leaves the input field (which loads the initial list again)
+        // in order to not show the loading indicator at that point, it is simply not modified if the search string is empty
+        if (searchString) {
+            this.setLoadingDevicesState(true);
+        }
+        // emit the search string in the search subject
+        this.masterSearch.next(searchString);
+    };
+
     onDeviceInputChange = (searchString: string): void => {
         // only set the loading state if the search string is present
         // due to react lifecycles this triggers if the user leaves the input field (which loads the initial list again)
@@ -247,6 +347,31 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         }
         // emit the search string in the search subject
         this.search.next(searchString);
+    };
+
+    onMasterDeviceSelectionChange = (masterDeviceSelection: SelectableValue<string>): void => {
+        const { onChange, query, onRunQuery } = this.props;
+        // check if the same value was selected again (no need to re-trigger any updates in this case)
+        if (masterDeviceSelection?.value !== query.masterDeviceId) {
+            // modify the query
+            onChange({
+                ...query,
+                masterDeviceId: masterDeviceSelection?.value,
+                masterDevice: masterDeviceSelection?.device,
+            });
+            // modify the state
+            this.setState((prevState) => ({
+                ...prevState,
+                masterDeviceValue: masterDeviceSelection,
+            }));
+            // load the devices
+            if (masterDeviceSelection?.value) {
+                const filter = '{"domain.id": "' + masterDeviceSelection.device.domain.id + '"}';
+                this.loadDevicesAndAssembleSelectionOptions(undefined, undefined, undefined, filter, masterDeviceSelection.device.id);
+            }
+            // execute the query
+            onRunQuery();
+        }
     };
 
     onDeviceSelectionChange = (deviceSelection: SelectableValue<string>): void => {
@@ -320,6 +445,8 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         // modify the query
         onChange({
             ...query,
+            masterDeviceId: '',
+            masterDevice: undefined,
             deviceId: '',
             device: undefined,
             topic: '',
@@ -327,13 +454,37 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         });
         // reset the state
         this.setState({
+            masterDeviceValue: {},
             deviceValue: {},
+            masterDeviceOptions: [],
             deviceOptions: [],
             topicValue: {},
             topicOptions: [],
             dataKeyValue: {},
             dataKeyOptions: [],
         });
+    }
+
+    private resetDeviceTopicAndDataKeyValues(deviceOptions: Array<SelectableValue<string>>) {
+        const { onChange, query } = this.props;
+
+        onChange({
+            ...query,
+            deviceId: '',
+            device: undefined,
+            topic: '',
+            dataKey: '',
+        });
+
+        this.setState((prevState) => ({
+            ...prevState,
+            deviceValue: {},
+            deviceOptions: deviceOptions,
+            topicValue: {},
+            topicOptions: [],
+            dataKeyValue: {},
+            dataKeyOptions: [],
+        }));
     }
 
     private resetTopicAndDataKeyValues(topicsOptions: Array<SelectableValue<string>>) {
@@ -351,6 +502,13 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
             topicOptions: topicsOptions,
             dataKeyValue: {},
             dataKeyOptions: [],
+        }));
+    }
+
+    private setLoadingMasterDevicesState(isLoading: boolean) {
+        this.setState((prevState) => ({
+            ...prevState,
+            loadingMasterDevices: isLoading,
         }));
     }
 
