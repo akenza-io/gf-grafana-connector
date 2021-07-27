@@ -69,20 +69,18 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
             .pipe(debounceTime(250), distinctUntilChanged())
             // subscribe and update the master device options
             .subscribe((searchString) => {
-                this.loadMasterDevicesAndAssembleSelectionOptions(searchString, true );
+                this.loadMasterDevicesAndAssembleSelectionOptions(searchString, true);
             });
         this.search
             // wait for 250ms after the user has finished typing
             .pipe(debounceTime(250), distinctUntilChanged())
             // subscribe and update the device options
             .subscribe((searchString) => {
-                let filter = undefined;
-                let masterDeviceId = undefined;
                 if (query.masterDevice) {
-                    masterDeviceId = query.masterDevice.id;
-                    filter = '{"domain.id": "' + query.masterDevice.domain.id + '"}';
+                    let filter = '{"domain.id": "' + query.masterDevice.domain.id + '"}';
+                    let masterDeviceId = query.masterDevice.id;
+                    this.loadDevicesAndAssembleSelectionOptions(searchString, true, undefined, filter, masterDeviceId);
                 }
-                this.loadDevicesAndAssembleSelectionOptions(searchString, true, undefined, filter, masterDeviceId);
             });
     }
 
@@ -102,14 +100,21 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
             this.loadMasterDevicesAndAssembleSelectionOptions(undefined, false, () => {
                 // query contains values if the panel was saved at some point, meaning the topic and data key selection should be loaded as well
                 if (query.masterDeviceId && query.deviceId && query.topic) {
-                    this.loadDevicesAndAssembleSelectionOptions(undefined, false, () => {
-                        this.loadTopicsAndAssembleSelectionOptions(query.deviceId!, () => {
-                            this.loadDataKeysAndAssembleSelectionOptions(query.deviceId!, query.topic!, () => {
-                                // set the initial loading state once everything has been loaded
-                                this.initialLoadingComplete = true;
+                    let filter = '{"domain.id": "' + query.masterDevice!.domain.id + '"}';
+                    this.loadDevicesAndAssembleSelectionOptions(
+                        undefined,
+                        false,
+                        () => {
+                            this.loadTopicsAndAssembleSelectionOptions(query.deviceId!, () => {
+                                this.loadDataKeysAndAssembleSelectionOptions(query.deviceId!, query.topic!, () => {
+                                    // set the initial loading state once everything has been loaded
+                                    this.initialLoadingComplete = true;
+                                });
                             });
-                        });
-                    });
+                        },
+                        filter,
+                        query.masterDeviceId
+                    );
                 } else {
                     this.initialLoadingComplete = true;
                 }
@@ -172,9 +177,6 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
                 for (const device of devices) {
                     deviceSelectOptions.push({ label: device.name, value: device.id, device });
                 }
-                if (this.initialLoadingComplete) {
-                    this.resetDeviceTopicAndDataKeyValues(deviceSelectOptions);
-                }
                 // modify the state
                 this.setState((prevState) => ({
                     ...prevState,
@@ -201,10 +203,17 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
                 for (const topic of topics) {
                     topicsSelectOptions.push({ label: topic, value: topic });
                 }
-                // reset the values only after initial loading was completed, will reset it again otherwise due to react lifecycles
                 if (this.initialLoadingComplete) {
+                    // reset the values only after initial loading was completed, will reset it again otherwise due to react lifecycles
                     this.resetTopicAndDataKeyValues(topicsSelectOptions);
+                } else {
+                    // on first load just set the available options
+                    this.setState((prevState) => ({
+                        ...prevState,
+                        topicOptions: topicsSelectOptions,
+                    }));
                 }
+
                 if (callback) {
                     callback();
                 }
@@ -225,12 +234,18 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
                 for (const key of keys) {
                     keySelectOptions.push({ label: key, value: key });
                 }
-                // reset the values only after initial loading was completed, will reset it again otherwise due to react lifecycles
                 if (this.initialLoadingComplete) {
+                    // reset the values only after initial loading was completed, will reset it again otherwise due to react lifecycles
                     this.setState((prevState) => ({
                         ...prevState,
                         dataKeyOptions: keySelectOptions,
                         dataKeyValue: {},
+                    }));
+                } else {
+                    // on first load just set the available options
+                    this.setState((prevState) => ({
+                        ...prevState,
+                        dataKeyOptions: keySelectOptions,
                     }));
                 }
                 if (callback) {
@@ -350,51 +365,26 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
     };
 
     onMasterDeviceSelectionChange = (masterDeviceSelection: SelectableValue<string>): void => {
-        const { onChange, query, onRunQuery } = this.props;
+        const { query } = this.props;
         // check if the same value was selected again (no need to re-trigger any updates in this case)
         if (masterDeviceSelection?.value !== query.masterDeviceId) {
-            // modify the query
-            onChange({
-                ...query,
-                masterDeviceId: masterDeviceSelection?.value,
-                masterDevice: masterDeviceSelection?.device,
-            });
-            // modify the state
-            this.setState((prevState) => ({
-                ...prevState,
-                masterDeviceValue: masterDeviceSelection,
-            }));
-            // load the devices
-            if (masterDeviceSelection?.value) {
-                const filter = '{"domain.id": "' + masterDeviceSelection.device.domain.id + '"}';
-                this.loadDevicesAndAssembleSelectionOptions(undefined, undefined, undefined, filter, masterDeviceSelection.device.id);
-            }
-            // execute the query
-            onRunQuery();
+            this.resetDeviceTopicAndDataKeyValues(masterDeviceSelection);
+            this.loadDevicesAndAssembleSelectionOptions(
+                undefined,
+                undefined,
+                undefined,
+                '{"domain.id": "' + masterDeviceSelection.device.domain.id + '"}',
+                masterDeviceSelection.device.id
+            );
         }
     };
 
     onDeviceSelectionChange = (deviceSelection: SelectableValue<string>): void => {
-        const { onChange, query, onRunQuery } = this.props;
+        const { query } = this.props;
         // check if the same value was selected again (no need to re-trigger any updates in this case)
         if (deviceSelection?.value !== query.deviceId) {
-            // modify the query
-            onChange({
-                ...query,
-                deviceId: deviceSelection?.value,
-                device: deviceSelection?.device,
-            });
-            // modify the state
-            this.setState((prevState) => ({
-                ...prevState,
-                deviceValue: deviceSelection,
-            }));
-            // load the topics if the event contains a device id
-            if (deviceSelection?.value) {
-                this.loadTopicsAndAssembleSelectionOptions(deviceSelection.value);
-            }
-            // execute the query
-            onRunQuery();
+            this.setDeviceValueAndResetTopicAndDataKeyValues(deviceSelection);
+            this.loadTopicsAndAssembleSelectionOptions(deviceSelection.value!);
         }
     };
 
@@ -465,21 +455,26 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         });
     }
 
-    private resetDeviceTopicAndDataKeyValues(deviceOptions: Array<SelectableValue<string>>) {
-        const { onChange, query } = this.props;
+    private resetDeviceTopicAndDataKeyValues(masterSelection: SelectableValue<string>) {
+        const { onChange, query, onRunQuery } = this.props;
 
         onChange({
             ...query,
+            masterDeviceId: masterSelection.value,
+            masterDevice: masterSelection.device,
             deviceId: '',
             device: undefined,
             topic: '',
             dataKey: '',
         });
+        // execute the query
+        onRunQuery();
 
         this.setState((prevState) => ({
             ...prevState,
+            masterDeviceValue: masterSelection,
             deviceValue: {},
-            deviceOptions: deviceOptions,
+            deviceOptions: [],
             topicValue: {},
             topicOptions: [],
             dataKeyValue: {},
@@ -487,19 +482,44 @@ export class QueryEditor extends PureComponent<Props, QueryEditorState> {
         }));
     }
 
-    private resetTopicAndDataKeyValues(topicsOptions: Array<SelectableValue<string>>) {
-        const { onChange, query } = this.props;
+    private setDeviceValueAndResetTopicAndDataKeyValues(deviceSelection: SelectableValue<string>) {
+        const { onChange, query, onRunQuery } = this.props;
+
+        onChange({
+            ...query,
+            deviceId: deviceSelection?.value,
+            device: deviceSelection?.device,
+            topic: '',
+            dataKey: '',
+        });
+        // execute the query
+        onRunQuery();
+
+        this.setState((prevState) => ({
+            ...prevState,
+            deviceValue: deviceSelection,
+            topicValue: {},
+            topicOptions: [],
+            dataKeyValue: {},
+            dataKeyOptions: [],
+        }));
+    }
+
+    private resetTopicAndDataKeyValues(topicOptions: Array<SelectableValue<string>>) {
+        const { onChange, query, onRunQuery } = this.props;
 
         onChange({
             ...query,
             topic: '',
             dataKey: '',
         });
+        // execute the query
+        onRunQuery();
 
         this.setState((prevState) => ({
             ...prevState,
             topicValue: {},
-            topicOptions: topicsOptions,
+            topicOptions: topicOptions,
             dataKeyValue: {},
             dataKeyOptions: [],
         }));

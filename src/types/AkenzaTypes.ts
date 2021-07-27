@@ -1,7 +1,7 @@
 export interface Device {
     id: string;
     name: string;
-    domain: Domain
+    domain: Domain;
     // no other properties since the API call is made using the fields param
 }
 

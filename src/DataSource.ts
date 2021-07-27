@@ -168,8 +168,15 @@ export class DataSource extends DataSourceApi<AkenzaQuery, AkenzaDataSourceConfi
 
     async getTopics(assetId: string): Promise<string[]> {
         return this.doRequest('/v2/assets/' + assetId + '/query/topics', 'GET').then(
-            (topics: HttpPromise<string[]>) => {
-                return topics.data;
+            (result: HttpPromise<string[]>) => {
+                let topics: string[] = [];
+                for (let topic of result.data) {
+                    if (topic.startsWith('measurement_') || topic.startsWith('sensor_')) {
+                        topics.push(topic);
+                    }
+                }
+
+                return topics;
             },
             (error: HttpErrorPromise) => {
                 throw this.generateErrorMessage(error);
