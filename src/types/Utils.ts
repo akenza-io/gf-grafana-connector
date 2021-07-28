@@ -25,12 +25,15 @@ export interface AkenzaErrorMessage {
 }
 
 export interface QueryEditorState {
+    masterDeviceValue: SelectableValue;
+    masterDeviceOptions: SelectableValue[];
     deviceValue: SelectableValue;
     deviceOptions: SelectableValue[];
     topicValue?: SelectableValue;
     topicOptions: SelectableValue[];
     dataKeyValue?: SelectableValue;
     dataKeyOptions: SelectableValue[];
+    loadingMasterDevices: boolean;
     loadingDevices: boolean;
     loadingTopics: boolean;
     loadingDataKeys: boolean;

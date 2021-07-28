@@ -1,7 +1,13 @@
 export interface Device {
     id: string;
     name: string;
+    domain: Domain;
     // no other properties since the API call is made using the fields param
+}
+
+export interface Domain {
+    id: string;
+    // other properties omitted
 }
 
 export interface DeviceList {
@@ -29,9 +35,22 @@ export interface Environment {
     // other properties omitted
 }
 
+export interface DeviceType {
+    id: string;
+    name: string;
+    // other properties omitted
+}
+
 export interface EnvironmentList {
     offset: number;
     limit: number;
     total: number;
     data: Environment[];
+}
+
+export interface DeviceTypeList {
+    offset: number;
+    limit: number;
+    total: number;
+    data: DeviceType[];
 }

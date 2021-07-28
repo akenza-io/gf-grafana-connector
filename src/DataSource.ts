@@ -10,7 +10,16 @@ import {
 } from '@grafana/data';
 import { BackendSrvRequest, getBackendSrv } from '@grafana/runtime';
 import buildUrl from 'build-url';
-import { DeviceData, DeviceList, Device, Environment, EnvironmentList, TimeSeriesData } from './types/AkenzaTypes';
+import {
+    DeviceData,
+    DeviceList,
+    Device,
+    Environment,
+    EnvironmentList,
+    TimeSeriesData,
+    DeviceType,
+    DeviceTypeList,
+} from './types/AkenzaTypes';
 import { AkenzaDataSourceConfig, AkenzaQuery } from './types/PluginTypes';
 import { HttpErrorPromise, HttpPromise } from './types/Utils';
 
@@ -95,19 +104,56 @@ export class DataSource extends DataSourceApi<AkenzaQuery, AkenzaDataSourceConfi
         );
     }
 
-    async getAssets(searchString?: string): Promise<Device[]> {
+    async getDevices(searchString?: string, filter?: string, masterDeviceId?: string): Promise<Device[]> {
         const params = {
             limit: 25,
             // has to be a string, since the backendSrv just calls toString() on it which results in [Object object] and an API error...
             fields: '{"id": true, "name": true}',
             search: searchString,
+            filter,
         };
 
         return this.getEnvironment().then(
             (environment) => {
                 return this.doRequest('/v2/environments/' + environment.id + '/devices', 'GET', params).then(
                     (assetListHttpPromise: HttpPromise<DeviceList>) => {
-                        return assetListHttpPromise.data.data;
+                        const devices: Device[] = [];
+                        for (const device of assetListHttpPromise.data.data) {
+                            if (device.id !== masterDeviceId) {
+                                devices.push(device);
+                            }
+                        }
+
+                        return devices;
+                    },
+                    (error: HttpErrorPromise) => {
+                        throw this.generateErrorMessage(error);
+                    }
+                );
+            },
+            (error: HttpErrorPromise) => {
+                throw this.generateErrorMessage(error);
+            }
+        );
+    }
+
+    async getMasterDeviceType(): Promise<DeviceType> {
+        const params = {
+            limit: 25,
+            // has to be a string, since the backendSrv just calls toString() on it which results in [Object object] and an API error...
+            fields: '{"id": true, "name": true}',
+            search: 'master',
+        };
+
+        return this.getEnvironment().then(
+            (environment) => {
+                return this.doRequest('/v2/environments/' + environment.id + '/device-types', 'GET', params).then(
+                    (deviceTypes: HttpPromise<DeviceTypeList>) => {
+                        if (deviceTypes.data.total === 0) {
+                            throw 'no master devices available';
+                        }
+
+                        return deviceTypes.data.data[0];
                     },
                     (error: HttpErrorPromise) => {
                         throw this.generateErrorMessage(error);
@@ -122,8 +168,15 @@ export class DataSource extends DataSourceApi<AkenzaQuery, AkenzaDataSourceConfi
 
     async getTopics(assetId: string): Promise<string[]> {
         return this.doRequest('/v2/assets/' + assetId + '/query/topics', 'GET').then(
-            (topics: HttpPromise<string[]>) => {
-                return topics.data;
+            (result: HttpPromise<string[]>) => {
+                let topics: string[] = [];
+                for (let topic of result.data) {
+                    if (topic.startsWith('measurement_') || topic.startsWith('sensor_')) {
+                        topics.push(topic);
+                    }
+                }
+
+                return topics;
             },
             (error: HttpErrorPromise) => {
                 throw this.generateErrorMessage(error);
